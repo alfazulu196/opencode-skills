@@ -1,0 +1,97 @@
+---
+name: Грабли Qt-приложений и offscreen-тестов
+description: Проверенные решения для PyQt6-приложений — синглтон QApplication в тест-сьюте, автосохранение черновиков с debounce, горячие клавиши keyPressEvent, скриншот-тур верификации UI, QComboBox в ячейках таблицы. Использовать при работе с Qt-UI и его тестами.
+---
+
+# Грабли PyQt6-приложений и дисциплина offscreen-тестов
+
+## Тест-сьют: один Qt-«app» на процесс
+
+- `os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")` — ДО импорта
+  PyQt6 (в каждом тест-модуле, чтобы работал и одиночный запуск).
+- Qt допускает **один** application на процесс. Синглтон общий для
+  QGuiApplication и QApplication: если один модуль тестов создал «голый»
+  QGuiApplication, то последующие виджет-тесты не смогут создать
+  QApplication. Паттерн хелпера:
+
+```python
+_APP = None
+
+def _qapp() -> QApplication | None:
+    global _APP
+    app = QApplication.instance()
+    if app is not None:
+        return app
+    try:
+        _APP = QApplication([])
+    except RuntimeError:
+        return None          # уже есть голый QGuiApplication
+    return _APP
+```
+
+  Виджет-смоуки при `None` — `pytest.skip(...)`. Либо сразу договориться:
+  все хелперы тестов создают **QApplication** (надкласс всего Qt), тогда
+  виджет-тесты в общем сьюте работают.
+
+## Автосохранение черновиков (защита от краша в поле)
+
+Состояние редактирования (таблица строк) сохранять в хранилище настроек
+(например, settings-таблица БД через `get_setting`/`set_setting` — они
+уже json-сериализуют dict):
+
+- payload: `{session_id, location_id, rows, saved_at}`;
+- **debounce** на правки: `QTimer(self)`, `setSingleShot(True)`,
+  `setInterval(800)`, на `itemChanged` → `timer.start()`;
+- флаг `_loading` гвардит ресторацию строк (массовые `setItem` при
+  восстановлении не должны запускать сохранение и рекурсию);
+- сохранить сразу после массовых вставок и в `reject()`/`closeEvent()`
+  (правки переживают закрытие), **очистить** после успешного accept;
+- при открытии: черновик этой же сессии → `QMessageBox.question`
+  «Восстановить?»; отказ — вычистить ключ;
+- обёртки `try/except` вокруг save/clear: черновик — вспомогательная
+  функция и не должен ронять диалог;
+- тесты: preset-setting → конструктор с monkeypatch на
+  `QMessageBox.question` (Yes/No) → проверки ресторации/очистки.
+  В тесте не забыть сам `set_setting` preset'а — частая оплошность.
+
+## Горячие клавиши обхода
+
+`QWidget` c `setFocusPolicy(Qt.FocusPolicy.StrongFocus)` +
+`keyPressEvent`: буквы S/V/F → действия; проверять
+`event.modifiers() != Qt.KeyboardModifier.NoModifier` → передать
+`super().keyPressEvent(event)` (не перехватывать Ctrl-сочетания).
+Поля `QLineEdit` съедают буквы сами — конфликта нет; `QListWidget`
+жрёт буквы под keyboard-search — приемлемо. Тултипы кнопок дополнить
+«(клавиша S)».
+
+## Верификация UI — «скриншот-тур»
+
+Верстку проверять глазами через `widget.grab()` → `save(PNG)` → смотреть
+картинку (перед grab — `app.processEvents()`; окно `show()`, не exec).
+Скриншоты ловили вещи, которые не видит код: сплющенные комбо, тофу,
+наложения. Реальная платформа (не offscreen) — иначе 0 шрифтов.
+
+## QComboBox в ячейке QTableWidget
+
+`setCellWidget(row, col, combo)`; если у таблицы глобальный стиль
+`QTableWidget::item { padding: ... }` — паддинг сплющивает
+ячейку-виджет до ~17px и текст комбо пропадает. Лечение: в стиле
+сбросить вертикальный паддинг (`padding: 0px 6px`). Найдено именно
+скриншот-туром, не тестами.
+
+## Excel-экспорт (openpyxl) — стабильно
+
+Отдельные листы под сущности (не пихать всё в один — не ломать высоту
+строк); `ws.add_image` для миниатюр (PIL-паттерн: thumbnail → temp PNG →
+Image → удалить temp после save); точные тесты на список `sheetnames`
+обновлять при добавлении листа; graceful degradation
+(`try: import PIL`) без молчаливых новых зависимостей.
+
+## Прочие проверенные
+
+- `QImage`, обёрнутый на python-буфере, — всегда `.copy()` (буфер
+  умирает, картинка рассыпается).
+- Тосты/статусные лейблы вместо модальных сообщений для мелочей;
+  модальные — только для решений.
+- Любой внешний ресурс (камера, сканер, микрофон, ИИ) — кнопка
+  недоступна с human-readable причиной, а не падение.
