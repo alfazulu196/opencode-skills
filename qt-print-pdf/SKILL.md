@@ -1,6 +1,6 @@
 ---
 name: Печать PDF в PyQt6
-description: Печатные документы (акты, чек-листы, этикетки) через QPdfWriter в PyQt6 — координаты в мм, кириллица, перенос страниц, обход access violation и визуальная проверка рендера. Использовать при любой генерации PDF/этикеток в Qt-приложении.
+description: Печатные документы (акты, чек-листы, этикетки): QPdfWriter в PyQt6 — координаты в мм, кириллица, перенос страниц, access violation, визуальная проверка рендера; альтернативы вне Qt — ReportLab, fpdf2, python-docx, печать openpyxl. Использовать при любой генерации PDF/документов/этикеток.
 ---
 
 # Печать PDF в PyQt6 через QPdfWriter
@@ -73,3 +73,46 @@ def _new_writer(out_path):
 кнопка «Открыть папку» через `QDesktopServices.openUrl(QUrl.fromLocalFile(...))`.
 Ошибки генерации — `QMessageBox.critical` с текстом исключения, диалог
 не ронять.
+
+## ReportLab — сервер/CLI без Qt
+
+Если рендер не нужен в Qt-приложении, ReportLab короче. Проверено:
+- TTF-фолбэк цепочкой: встроенный DejaVu → `C:\Windows\Fonts\arial.ttf`/
+  segoeui → Linux dejavu → Helvetica аварийно; для жирных Paragraph —
+  `registerFontFamily`.
+- «Страница X из Y»: NumberedCanvas — `showPage()` копит
+  `dict(self.__dict__)`, в `save()` total известен → перерисовать
+  футеры всех страниц.
+- Любая пользовательская строка в Paragraph — через
+  `xml.sax.saxutils.escape()`.
+- Блок «итоги + подписи» — `KeepTogether`; шапка таблицы на новых
+  страницах — `repeatRows=1`; ширины колонок масштабировать под
+  доступную ширину (`scale = available / sum(widths)`).
+- Тест PDF: `%PDF-`-магия + pypdf-извлечение текста — кириллица реально
+  в тексте, «Страница 1 из» на месте.
+
+## fpdf2
+
+Без TTF PDF невозможен: искать `arial.ttf` в `C:\Windows\Fonts`,
+регистрировать под коротким именем и всегда его указывать. После
+`multi_cell` курсор стоит у правого поля — новую ячейку/линию всегда
+начинать от левого поля, иначе «не влезает».
+
+## python-docx
+
+Заливка ячейки цветом — только через XML
+(`<w:shd w:val="clear" w:fill="..."/>`); таблицы — стиль `'Table Grid'`.
+
+## Excel-печать (openpyxl)
+
+- Печать одной связкой: `ws.print_title_rows = f"1:{header_row}"`,
+  `page_setup.fitToWidth = 1` и обязательно
+  `ws.sheet_properties.pageSetUpPr.fitToPage = True`, колонтитул
+  `ws.oddFooter.right.text = "Страница &P из &N"`.
+- Живые формулы вместо значений (`=ROUND(F2*(1+G2/100),2)`) +
+  `wb.calculation.fullCalcOnLoad = True` — пересчёт при открытии.
+- Служебный лист (наценка/маржа), который клиент не должен видеть —
+  `sheet_state = "hidden"`.
+- Защита от формульных инъекций из недоверенных данных: текст,
+  начинающийся на `= + - @`, префиксовать `'`.
+- CSV для Excel — `utf-8-sig`.

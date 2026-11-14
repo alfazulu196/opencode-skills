@@ -1,6 +1,6 @@
 ---
 name: PyInstaller exe для Windows
-description: Сборка Windows-exe (onefile + onedir) для офлайн-полевых машин — spec с collect_all, транзитивные хуки, excludes для размера, кириллические пути и PowerShell/UTF-8 грабли. Использовать при упаковке python-приложений в exe.
+description: Сборка Windows-exe (onefile + onedir) для офлайн-полевых машин — spec с collect_all, транзитивные хуки, excludes для размера, кириллические пути, бандл внешних бинарников (nmap, tesseract), OpenCV/RTSP env-опции, кодировки приложения и дочерних процессов. Использовать при упаковке python-приложений в exe.
 ---
 
 # PyInstaller: exe для офлайн-полевых машин
@@ -57,6 +57,42 @@ img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
 
   То же для записи: `cv2.imencode(ext, img)[1].tofile(str(path))`.
 - `QImage.save()`/Qt и openpyxl с кириллическими путями работают нормально.
+- Приложение само приводит stdout/stderr к UTF-8 при старте:
+  `stream.reconfigure(encoding="utf-8", errors="replace")` — иначе
+  веб-панели и логи дают крякозябры.
+- Дочерний python с кириллическим выводом — в окружение потомка добавить
+  `PYTHONIOENCODING='utf-8'` (`subprocess.run(..., env=env)`).
+- PowerShell-скрипты: в начале `#requires -Version 5.1`,
+  `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`,
+  `$OutputEncoding = ...`, `& chcp.com 65001 > $null`.
+- PS 5.1 не имеет `-SkipCertificateCheck` — фолбэк `curl.exe -k` (есть в
+  Win10/11), резерв `python -c "...requests.get(verify=False)"`.
+- Убивать процессы только после проверки `Win32_Process.CommandLine`
+  (PID принадлежит корню проекта), потом `taskkill /PID x /T /F`;
+  состояние PID — в `.run/pids.json`.
+
+## Бандл внешних бинарников
+
+- nmap можно вшить в exe (папка `nmap_bundle` внутри PKG): при старте
+  добавить её в PATH и выставить `NMAPDIR` — python-nmap найдёт бандл
+  без установки на машине. python-nmap — лишь обёртка: без nmap.exe не
+  работает; проверять `nmap --version` в НОВОМ терминале.
+- Подобранные флаги: `-sT` явно — bundled Nmap работает даже без Npcap.
+  NSE-словари для брутфорса — во временные файлы (Lua nmap не читает
+  stdin), `--script-args userdb=...,passdb=...,max-connections=10,brute.timeout=1s`.
+- **nmap.exe на Windows умеет зависать вечно** — жёсткий таймаут на
+  процесс; при срабатывании — фолбэк на чистые сокеты (always).
+- Tesseract: путь и tessdata через env (`TESSERACT_CMD`,
+  `TESSDATA_PREFIX`); отсутствие — понятная ошибка с командой установки.
+
+## OpenCV/RTSP
+
+- Переменные окружения FFmpeg задавать ДО создания VideoCapture:
+  `os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;1000000"`
+  (таймаут в микросекундах; внутри — разделители `;` и `|`, не `=`).
+  TCP-транспорт против потери пакетов по Wi-Fi.
+- `cap.isOpened()` мало — поток валиден, только если реально прочитан
+  кадр (`ret, _ = cap.read()`).
 
 ## Пути и окружение
 
